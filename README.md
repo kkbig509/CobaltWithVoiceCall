@@ -1,4 +1,9 @@
-# Cobalt
+# CobaltWithVoiceCall
+
+**✨ NEW: Real-time Voice Call Support**
+
+**This enhanced version includes comprehensive support for WhatsApp real-time voice calls with automatic audio processing, Opus codec integration, and so on.**
+
 
 > **_IMPORTANT:_** The library is currently being rewritten to prepare for a stable release. The code on the master branch is under active development.
 
@@ -16,7 +21,7 @@ It can be used with:
 ### Donations
 
 If you like my work, you can become a sponsor here on GitHub or tip me through:
-- [Paypal](https://www.paypal.me/AutiesDevelopment)
+- [Paypal](https://www.paypal.me/welove88)
 
 I can also work on sponsored features and/or projects!
 

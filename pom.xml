@@ -300,6 +300,21 @@
             <version>1.0.0</version>
         </dependency>
 
+        <!-- Opus audio codec for voice calls -->
+        <!-- https://mvnrepository.com/artifact/io.github.jaredmdobson/concentus -->
+        <dependency>
+            <groupId>io.github.jaredmdobson</groupId>
+            <artifactId>concentus</artifactId>
+            <version>1.0.1</version>
+        </dependency>
+
+        <!-- WebSocket client for voice calls -->
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <version>1.5.4</version>
+        </dependency>
+
         <!-- Testing framework -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

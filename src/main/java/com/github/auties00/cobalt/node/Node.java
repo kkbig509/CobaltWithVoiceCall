@@ -10,6 +10,7 @@ import java.util.*;
 import java.util.stream.DoubleStream;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
+import java.util.Base64;
 
 /**
  * A sealed interface representing a node in the WhatsApp protocol communication structure.
@@ -599,18 +600,22 @@ public sealed interface Node {
 
         @Override
         public String toString() {
-            var result = new StringBuilder();
-            result.append("Node[description=");
-            result.append(description);
-
-            if(!attributes.isEmpty()) {
-                result.append(", attributes=");
-                result.append(attributes);
+            var sb = new StringBuilder();
+            sb.append("<");
+            sb.append(description);
+            
+            if (!attributes.isEmpty()) {
+                for (var attribute : attributes.entrySet()) {
+                    sb.append(" ");
+                    sb.append(attribute.getKey());
+                    sb.append("='");
+                    sb.append(attribute.getValue().toString());
+                    sb.append("'");
+                }
             }
-
-            result.append("]");
-
-            return result.toString();
+            
+            sb.append("/>");
+            return sb.toString();
         }
     }
 
@@ -708,23 +713,31 @@ public sealed interface Node {
         }
         @Override
         public String toString() {
-            var result = new StringBuilder();
-            result.append("Node[description=");
-            result.append(description());
-
-            if(!attributes.isEmpty()) {
-                result.append(", attributes=");
-                result.append(attributes);
+            var sb = new StringBuilder();
+            sb.append("<");
+            sb.append(description);
+            
+            if (!attributes.isEmpty()) {
+                for (var attribute : attributes.entrySet()) {
+                    sb.append(" ");
+                    sb.append(attribute.getKey());
+                    sb.append("='");
+                    sb.append(attribute.getValue().toString());
+                    sb.append("'");
+                }
             }
-
-            if(content != null) {
-                result.append(", content=");
-                result.append(content);
+            
+            if (content == null || content.isEmpty()) {
+                sb.append("/>");
+            } else {
+                sb.append(">");
+                sb.append(content);
+                sb.append("</");
+                sb.append(description);
+                sb.append(">");
             }
-
-            result.append("]");
-
-            return result.toString();
+            
+            return sb.toString();
         }
     }
 
@@ -815,23 +828,31 @@ public sealed interface Node {
 
         @Override
         public String toString() {
-            var result = new StringBuilder();
-            result.append("Node[description=");
-            result.append(description());
-
-            if(!attributes.isEmpty()) {
-                result.append(", attributes=");
-                result.append(attributes);
+            var sb = new StringBuilder();
+            sb.append("<");
+            sb.append(description);
+            
+            if (!attributes.isEmpty()) {
+                for (var attribute : attributes.entrySet()) {
+                    sb.append(" ");
+                    sb.append(attribute.getKey());
+                    sb.append("='");
+                    sb.append(attribute.getValue().toString());
+                    sb.append("'");
+                }
             }
-
-            if(content != null) {
-                result.append(", content=");
-                result.append(content);
+            
+            if (content == null) {
+                sb.append("/>");
+            } else {
+                sb.append(">");
+                sb.append(content.toString());
+                sb.append("</");
+                sb.append(description);
+                sb.append(">");
             }
-
-            result.append("]");
-
-            return result.toString();
+            
+            return sb.toString();
         }
     }
 
@@ -928,28 +949,35 @@ public sealed interface Node {
         }
         @Override
         public String toString() {
-            var result = new StringBuilder();
-            result.append("Node[description=");
-            result.append(description());
-
-            if(!attributes.isEmpty()) {
-                result.append(", attributes=");
-                result.append(attributes);
-            }
-
-            if(content != null) {
-                if(hasDescription("result") || hasDescription("query") || hasDescription("body")) {
-                    result.append(", content=");
-                    result.append(new String(content));
-                }else {
-                    result.append(", content=");
-                    result.append(Arrays.toString(content));
+            var sb = new StringBuilder();
+            sb.append("<");
+            sb.append(description);
+            
+            if (!attributes.isEmpty()) {
+                for (var attribute : attributes.entrySet()) {
+                    sb.append(" ");
+                    sb.append(attribute.getKey());
+                    sb.append("='");
+                    sb.append(attribute.getValue().toString());
+                    sb.append("'");
                 }
             }
-
-            result.append("]");
-
-            return result.toString();
+            
+            if (content == null || content.length == 0) {
+                sb.append("/>");
+            } else {
+                sb.append(">");
+                if (hasDescription("result") || hasDescription("query") || hasDescription("body")) {
+                    sb.append(new String(content));
+                } else {
+                    sb.append(Base64.getEncoder().encodeToString(content));
+                }
+                sb.append("</");
+                sb.append(description);
+                sb.append(">");
+            }
+            
+            return sb.toString();
         }
     }
 
@@ -1046,23 +1074,33 @@ public sealed interface Node {
 
         @Override
         public String toString() {
-            var result = new StringBuilder();
-            result.append("Node[description=");
-            result.append(description());
-
-            if(!attributes.isEmpty()) {
-                result.append(", attributes=");
-                result.append(attributes);
+            var sb = new StringBuilder();
+            sb.append("<");
+            sb.append(description);
+            
+            if (!attributes.isEmpty()) {
+                for (var attribute : attributes.entrySet()) {
+                    sb.append(" ");
+                    sb.append(attribute.getKey());
+                    sb.append("='");
+                    sb.append(attribute.getValue().toString());
+                    sb.append("'");
+                }
             }
-
-            if(!children.isEmpty()) {
-                result.append(", children=");
-                result.append(children);
+            
+            if (children.isEmpty()) {
+                sb.append("/>");
+            } else {
+                sb.append(">");
+                for (var child : children) {
+                    sb.append(child.toString());
+                }
+                sb.append("</");
+                sb.append(description);
+                sb.append(">");
             }
-
-            result.append("]");
-
-            return result.toString();
+            
+            return sb.toString();
         }
     }
 }
