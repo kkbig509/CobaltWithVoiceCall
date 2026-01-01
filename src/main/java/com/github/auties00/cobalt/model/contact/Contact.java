@@ -76,7 +76,14 @@ public final class Contact implements JidProvider {
     @ProtobufProperty(index = 8, type = ProtobufType.BOOL)
     boolean statusMuted;
 
-    Contact(Jid jid, String chosenName, String fullName, String shortName, ContactStatus lastKnownPresence, long lastSeenSeconds, boolean blocked, boolean statusMuted) {
+    /**
+     * The LID (Long ID) associated with this contact for the LID migration.
+     * This maps the phone number JID to the corresponding LID.
+     */
+    @ProtobufProperty(index = 9, type = ProtobufType.STRING)
+    Jid lid;
+
+    Contact(Jid jid, String chosenName, String fullName, String shortName, ContactStatus lastKnownPresence, long lastSeenSeconds, boolean blocked, boolean statusMuted, Jid lid) {
         this.jid = Objects.requireNonNull(jid, "value cannot be null");
         this.chosenName = chosenName;
         this.fullName = fullName;
@@ -85,6 +92,7 @@ public final class Contact implements JidProvider {
         this.lastSeenSeconds = lastSeenSeconds;
         this.blocked = blocked;
         this.statusMuted = statusMuted;
+        this.lid = lid;
     }
 
     public Jid jid() {
@@ -167,6 +175,33 @@ public final class Contact implements JidProvider {
         this.statusMuted = statusMuted;
     }
 
+    /**
+     * Returns the LID (Long ID) associated with this contact
+     *
+     * @return an optional LID
+     */
+    public Optional<Jid> lid() {
+        return Optional.ofNullable(lid);
+    }
+
+    /**
+     * Sets the LID (Long ID) for this contact
+     *
+     * @param lid the LID to set
+     */
+    public void setLid(Jid lid) {
+        this.lid = lid;
+    }
+
+    /**
+     * Returns whether this contact has a LID mapping
+     *
+     * @return true if a LID is set
+     */
+    public boolean hasLid() {
+        return lid != null;
+    }
+
     @Override
     public int hashCode() {
         return Objects.hashCode(this.jid());
@@ -178,7 +213,12 @@ public final class Contact implements JidProvider {
 
     @Override
     public Jid toJid() {
-        return jid();
+        var lid = this.lid;
+        if(lid != null) {
+            return lid;
+        } else {
+            return jid;
+        }
     }
 
     public boolean hasName(String name) {

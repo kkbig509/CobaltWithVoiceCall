@@ -3,9 +3,12 @@ package com.github.auties00.cobalt.socket.iq;
 import com.github.auties00.cobalt.client.WhatsAppClient;
 import com.github.auties00.cobalt.client.WhatsAppClientDisconnectReason;
 import com.github.auties00.cobalt.client.WhatsAppClientVerificationHandler;
-import com.github.auties00.cobalt.exception.HmacValidationException;
+import com.github.auties00.cobalt.exception.ADVValidationException;
 import com.github.auties00.cobalt.exception.SessionClosedException;
-import com.github.auties00.cobalt.model.auth.*;
+import com.github.auties00.cobalt.model.auth.DeviceIdentitySpec;
+import com.github.auties00.cobalt.model.auth.SignedDeviceIdentity;
+import com.github.auties00.cobalt.model.auth.SignedDeviceIdentityBuilder;
+import com.github.auties00.cobalt.model.auth.SignedDeviceIdentitySpec;
 import com.github.auties00.cobalt.model.auth.UserAgent.PlatformType;
 import com.github.auties00.cobalt.model.contact.ContactBuilder;
 import com.github.auties00.cobalt.model.contact.ContactStatus;
@@ -15,18 +18,14 @@ import com.github.auties00.cobalt.node.Node;
 import com.github.auties00.cobalt.node.NodeBuilder;
 import com.github.auties00.cobalt.socket.SocketPhonePairing;
 import com.github.auties00.cobalt.socket.SocketStream;
+import com.github.auties00.cobalt.device.adv.DeviceADVValidator;
 import com.github.auties00.cobalt.util.Clock;
-import com.github.auties00.cobalt.util.SecureBytes;
-import com.github.auties00.curve25519.Curve25519;
 import com.github.auties00.libsignal.key.SignalIdentityKeyPair;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -35,8 +34,6 @@ import static com.github.auties00.cobalt.client.WhatsAppClientErrorHandler.Locat
 
 public final class IqStreamNodeHandler extends SocketStream.Handler {
     private static final int PING_INTERVAL = 30;
-    private static final byte[] DEVICE_WEB_SIGNATURE_HEADER = {6, 1};
-    private static final byte[] ACCOUNT_SIGNATURE_HEADER = {6, 0};
 
     private final WhatsAppClientVerificationHandler.Web webVerificationHandler;
     private final SocketPhonePairing pairingCode;
@@ -199,53 +196,32 @@ public final class IqStreamNodeHandler extends SocketStream.Handler {
 
     private void handlePairSuccess(Node node, Node container) {
         saveCompanion(container);
-        var deviceIdentity = container.getChild("device-identity")
-                .orElseThrow(() -> new InternalError("Missing device identity"))
-                .toContentBytes()
-                .orElseThrow(() -> new InternalError("Missing device identity content"));
-        var advIdentity = SignedDeviceIdentityHMACSpec.decode(deviceIdentity);
-        var advSign = getAdvSign(advIdentity);
-        if (!Arrays.equals(advIdentity.hmac(), advSign)) {
-            whatsapp.handleFailure(AUTH, new HmacValidationException("adv_sign"));
+
+        var signedDeviceIdentity = parseSignedDeviceIdentity(container);
+        if(signedDeviceIdentity.isEmpty()) {
             return;
         }
-        var account = SignedDeviceIdentitySpec.decode(advIdentity.details());
-        whatsapp.store().setCompanionIdentity(account);
-        var identityPublicKey = whatsapp.store().identityKeyPair().publicKey().toEncodedPoint();
-        var message = SecureBytes.concat(
-                ACCOUNT_SIGNATURE_HEADER,
-                account.details(),
-                identityPublicKey
-        );
-        if (!Curve25519.verifySignature(account.accountSignatureKey(), message, account.accountSignature())) {
-            whatsapp.handleFailure(AUTH, new HmacValidationException("message_header"));
-            return;
-        }
-        var deviceSignatureMessage = SecureBytes.concat(
-                DEVICE_WEB_SIGNATURE_HEADER,
-                account.details(),
-                identityPublicKey,
-                account.accountSignatureKey()
-        );
-        var result = new SignedDeviceIdentityBuilder()
-                .accountSignature(account.accountSignature())
-                .accountSignatureKey(account.accountSignatureKey())
-                .details(account.details())
-                .deviceSignature(Curve25519.sign(whatsapp.store().identityKeyPair().privateKey().toEncodedPoint(), deviceSignatureMessage))
-                .build();
-        whatsapp.store().setCompanionIdentity(result);
+        whatsapp.store()
+                .setCompanionIdentity(signedDeviceIdentity.get());
+
         var platform = getWebPlatform(node);
         var device = whatsapp.store()
                 .device()
                 .withPlatform(platform);
         whatsapp.store()
                 .setDevice(device);
-        var keyIndex = DeviceIdentitySpec.decode(result.details()).keyIndex();
-        var outgoingDeviceIdentity = SignedDeviceIdentitySpec.encode(new SignedDeviceIdentity(result.details(), null, result.accountSignature(), result.deviceSignature()));
+
+        var deviceIdentity = DeviceIdentitySpec.decode(signedDeviceIdentity.get().details());
+        var signedDeviceIdentityWithoutAccountSignatureKey = new SignedDeviceIdentityBuilder()
+                .details(signedDeviceIdentity.get().details())
+                .accountSignature(signedDeviceIdentity.get().accountSignature())
+                .deviceSignature(signedDeviceIdentity.get().deviceSignature())
+                .build();
+        var encodedSignedDeviceIdentityWithoutAccountSignatureKey = SignedDeviceIdentitySpec.encode(signedDeviceIdentityWithoutAccountSignatureKey);
         var deviceIdentityNode = new NodeBuilder()
                 .description("device-identity")
-                .attribute("key-index", keyIndex)
-                .content(outgoingDeviceIdentity)
+                .attribute("key-index", deviceIdentity.keyIndex())
+                .content(encodedSignedDeviceIdentityWithoutAccountSignatureKey)
                 .build();
         var devicePairRequest = new NodeBuilder()
                 .description("pair-device-sign")
@@ -254,19 +230,20 @@ public final class IqStreamNodeHandler extends SocketStream.Handler {
         sendConfirmNode(node, devicePairRequest);
     }
 
-    private byte[] getAdvSign(SignedDeviceIdentityHMAC advIdentity) {
+    private Optional<SignedDeviceIdentity> parseSignedDeviceIdentity(Node container) {
         try {
-            var mac = Mac.getInstance("HmacSHA256");
-            var companionKey = whatsapp.store()
+            var jid = whatsapp.store()
+                    .jid()
+                    .orElseThrow(() -> new IllegalStateException("Jid was not set"));
+            var companionKeyPair = whatsapp.store()
                     .companionKeyPair()
-                    .orElseThrow(() -> new InternalError("Missing companion key pair"))
-                    .publicKey()
-                    .toEncodedPoint();
-            var companionSecretKey = new SecretKeySpec(companionKey, "HmacSHA256");
-            mac.init(companionSecretKey);
-            return mac.doFinal(advIdentity.details());
-        }catch (GeneralSecurityException exception) {
-            throw new InternalError("Cannot get adv sign", exception);
+                    .orElseThrow(() -> new IllegalStateException("Missing companion key pair"));
+            var identityKeyPair = whatsapp.store().identityKeyPair();
+            var signedDeviceIdentity = DeviceADVValidator.extractAndValidateLocalSignedDeviceIdentity(jid, companionKeyPair, identityKeyPair, container);
+            return Optional.of(signedDeviceIdentity);
+        } catch (ADVValidationException exception) {
+            whatsapp.handleFailure(AUTH, exception);
+            return Optional.empty();
         }
     }
 

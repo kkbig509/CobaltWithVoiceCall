@@ -1,9 +1,10 @@
 package com.github.auties00.cobalt.client;
 
 import com.alibaba.fastjson2.JSON;
-import com.github.auties00.cobalt.node.mex.json.request.CommunityRequests;
-import com.github.auties00.cobalt.node.mex.json.request.NewsletterRequests;
-import com.github.auties00.cobalt.node.mex.json.request.UserRequests;
+import com.github.auties00.cobalt.device.DeviceService;
+import com.github.auties00.cobalt.message.MessageReceiverService;
+import com.github.auties00.cobalt.message.MessageSenderService;
+import com.github.auties00.cobalt.migration.LidMigrationService;
 import com.github.auties00.cobalt.model.action.*;
 import com.github.auties00.cobalt.model.auth.*;
 import com.github.auties00.cobalt.model.business.*;
@@ -33,16 +34,21 @@ import com.github.auties00.cobalt.model.setting.Setting;
 import com.github.auties00.cobalt.model.sync.*;
 import com.github.auties00.cobalt.model.sync.RecordSync.Operation;
 import com.github.auties00.cobalt.node.*;
+import com.github.auties00.cobalt.node.mex.json.request.CommunityRequests;
+import com.github.auties00.cobalt.node.mex.json.request.NewsletterRequests;
+import com.github.auties00.cobalt.node.mex.json.request.UserRequests;
 import com.github.auties00.cobalt.node.mex.json.response.*;
 import com.github.auties00.cobalt.socket.SocketRequest;
 import com.github.auties00.cobalt.socket.SocketSession;
 import com.github.auties00.cobalt.socket.SocketStream;
-import com.github.auties00.cobalt.store.WhatsappStore;
-import com.github.auties00.cobalt.sync.WebAppState;
+import com.github.auties00.cobalt.store.WhatsAppStore;
+import com.github.auties00.cobalt.sync.WebAppStateService;
 import com.github.auties00.cobalt.util.Clock;
 import com.github.auties00.cobalt.util.MetaBots;
 import com.github.auties00.cobalt.util.SecureBytes;
 import com.github.auties00.curve25519.Curve25519;
+import com.github.auties00.libsignal.SignalSessionCipher;
+import com.github.auties00.libsignal.groups.SignalGroupCipher;
 import com.github.auties00.libsignal.key.SignalIdentityPublicKey;
 import com.github.auties00.libsignal.key.SignalPreKeyPair;
 
@@ -96,24 +102,37 @@ public final class WhatsAppClient {
 
     private static final long MIN_PRE_KEYS_COUNT = 5;
 
-    private final WhatsappStore store;
+    private final WhatsAppStore store;
     private final WhatsAppClientErrorHandler errorHandler;
-    private final WebAppState webAppState;
+    private final WhatsAppClientMessagePreviewHandler messagePreviewHandler;
+
+    private final WebAppStateService webAppStateService;
+    private final DeviceService deviceService;
+    private final LidMigrationService lidMigrationService;
+    private final MessageSenderService messageSenderService;
+    private final MessageReceiverService messageReceiverService;
 
     private SocketSession socketSession;
     private final SocketStream socketStream;
     private final ConcurrentMap<String, SocketRequest> pendingSocketRequests;
     private Thread shutdownHook;
 
-    WhatsAppClient(WhatsappStore store, WhatsAppClientVerificationHandler.Web webVerificationHandler, WhatsAppClientMessagePreviewHandler messagePreviewHandler, WhatsAppClientErrorHandler errorHandler) {
+    WhatsAppClient(WhatsAppStore store, WhatsAppClientVerificationHandler.Web webVerificationHandler, WhatsAppClientMessagePreviewHandler messagePreviewHandler, WhatsAppClientErrorHandler errorHandler) {
         this.store = Objects.requireNonNull(store, "store cannot be null");
         this.errorHandler = Objects.requireNonNull(errorHandler, "errorHandler cannot be null");
         if ((store.clientType() == WhatsAppClientType.WEB) == (webVerificationHandler == null)) {
             throw new IllegalArgumentException("webVerificationHandler cannot be null when client type is WEB");
         }
-        this.webAppState = new WebAppState(this);
+        var sessionCipher = new SignalSessionCipher(store);
+        var groupCipher = new SignalGroupCipher(store);
+        this.webAppStateService = new WebAppStateService(this);
+        this.deviceService = new DeviceService(this, sessionCipher, groupCipher);
+        this.lidMigrationService = new LidMigrationService(this);
+        this.messageSenderService = new MessageSenderService(this, deviceService, sessionCipher, groupCipher);
+        this.messageReceiverService = new MessageReceiverService(this, deviceService, sessionCipher, groupCipher);
         this.pendingSocketRequests = new ConcurrentHashMap<>();
-        this.socketStream = new SocketStream(this, webVerificationHandler);
+        this.socketStream = new SocketStream(this, deviceService, messageReceiverService, lidMigrationService, webVerificationHandler);
+        this.messagePreviewHandler = messagePreviewHandler;
     }
 
     /**
@@ -132,9 +151,14 @@ public final class WhatsAppClient {
      *
      * @return a non-null WhatsappStore
      */
-    public WhatsappStore store() {
+    public WhatsAppStore store() {
         return store;
     }
+
+    public WhatsAppClientMessagePreviewHandler messagePreviewHandler() {
+        return messagePreviewHandler;
+    }
+
     //</editor-fold>
 
     //<editor-fold desc="Connection">
@@ -174,7 +198,7 @@ public final class WhatsAppClient {
         if (shutdownHook == null) {
             this.shutdownHook = Thread.ofPlatform()
                     .name("CobaltShutdownHandler")
-                    .unstarted(this::onShutdown);
+                    .unstarted(() -> disconnect(WhatsAppClientDisconnectReason.DISCONNECTED, false));
             Runtime.getRuntime().addShutdownHook(shutdownHook);
         }
     }
@@ -211,16 +235,16 @@ public final class WhatsAppClient {
                             .pull(true)
                             .device(jid.get().device())
                             .build();
+                } else {
+                    yield new ClientPayloadBuilder()
+                            .connectReason(ClientPayload.ClientPayloadConnectReason.USER_ACTIVATED)
+                            .connectType(ClientPayload.ClientPayloadConnectType.WIFI_UNKNOWN)
+                            .userAgent(agent)
+                            .regData(createRegisterData())
+                            .passive(false)
+                            .pull(false)
+                            .build();
                 }
-
-                yield new ClientPayloadBuilder()
-                        .connectReason(ClientPayload.ClientPayloadConnectReason.USER_ACTIVATED)
-                        .connectType(ClientPayload.ClientPayloadConnectType.WIFI_UNKNOWN)
-                        .userAgent(agent)
-                        .regData(createRegisterData())
-                        .passive(false)
-                        .pull(false)
-                        .build();
             }
         };
     }
@@ -295,6 +319,10 @@ public final class WhatsAppClient {
 
 
     public void disconnect(WhatsAppClientDisconnectReason reason) {
+        disconnect(reason, true);
+    }
+
+    private void disconnect(WhatsAppClientDisconnectReason reason, boolean canRemoveShutdownHook) {
         if (!isConnected()) {
             return;
         }
@@ -305,29 +333,31 @@ public final class WhatsAppClient {
 
         pendingSocketRequests.forEach((ignored, request) -> request.complete(null));
         pendingSocketRequests.clear();
+
         if (reason == WhatsAppClientDisconnectReason.LOGGED_OUT || reason == WhatsAppClientDisconnectReason.BANNED) {
             store.setSerializable(false);
             var serializer = store.serializer();
             serializer.deleteSession(store.clientType(), store.uuid());
+        } else {
+            store.serialize();
         }
-        if (reason != WhatsAppClientDisconnectReason.RECONNECTING) {
-            if (shutdownHook != null) {
-                Runtime.getRuntime().removeShutdownHook(shutdownHook);
-                shutdownHook = null;
-            }
-            onShutdown();
+
+        lidMigrationService.reset();
+        socketStream.reset();
+        webAppStateService.reset();
+
+        if (reason != WhatsAppClientDisconnectReason.RECONNECTING && shutdownHook != null && canRemoveShutdownHook) {
+            Runtime.getRuntime().removeShutdownHook(shutdownHook);
+            shutdownHook = null;
         }
+
         for (var listener : store.listeners()) {
             listener.onDisconnected(this, reason);
         }
+
         if (reason == WhatsAppClientDisconnectReason.RECONNECTING) {
             connect(reason);
         }
-    }
-
-    private void onShutdown() {
-        webAppState.close();
-        store.serialize();
     }
 
     private void onMessage(ByteBuffer message) {
@@ -408,26 +438,25 @@ public final class WhatsAppClient {
     /**
      * Disconnects from Whatsapp Web's WebSocket and logs out of WhatsappWeb invalidating the previous
      * saved credentials. The next time the API is used, the QR code will need to be scanned again.
-     *
      */
     public void logout() {
-        if (jidOrThrowError() == null) {
+        var localJid = store.jid();
+        if (localJid.isEmpty()) {
             disconnect(WhatsAppClientDisconnectReason.LOGGED_OUT);
-            return;
+        } else {
+            var device = new NodeBuilder()
+                    .description("remove-companion-device")
+                    .attribute("value", localJid.get())
+                    .attribute("reason", "user_initiated")
+                    .build();
+            var iqNode = new NodeBuilder()
+                    .description("iq")
+                    .attribute("xmlns", "md")
+                    .attribute("to", JidServer.user())
+                    .attribute("type", "set")
+                    .content(device);
+            sendNode(iqNode);
         }
-
-        var device = new NodeBuilder()
-                .description("remove-companion-device")
-                .attribute("value", jidOrThrowError())
-                .attribute("reason", "user_initiated")
-                .build();
-        var iqNode = new NodeBuilder()
-                .description("iq")
-                .attribute("xmlns", "md")
-                .attribute("to", JidServer.user())
-                .attribute("type", "set")
-                .content(device);
-        sendNode(iqNode);
     }
 
     /**
@@ -457,10 +486,6 @@ public final class WhatsAppClient {
         return this;
     }
 
-    private Jid jidOrThrowError() {
-        return store.jid()
-                .orElseThrow(() -> new IllegalStateException("The session isn't connected"));
-    }
     //</editor-fold>
 
     //<editor-fold desc="Error handling">
@@ -553,7 +578,7 @@ public final class WhatsAppClient {
                 .build();
         var syncNode = new NodeBuilder()
                 .description("usync")
-                .attribute("sid", randomSid())
+                .attribute("sid", SecureBytes.randomSid())
                 .attribute("mode", "query")
                 .attribute("last", "true")
                 .attribute("index", "0")
@@ -608,10 +633,6 @@ public final class WhatsAppClient {
                 .getRequiredAttribute("type")
                 .toString()
                 .equals("in");
-    }
-
-    private static String randomSid() {
-        return Clock.nowSeconds() + "-" + ThreadLocalRandom.current().nextLong(1_000_000_000, 9_999_999_999L) + "-" + ThreadLocalRandom.current().nextInt(0, 1000);
     }
 
     /**
@@ -690,7 +711,7 @@ public final class WhatsAppClient {
                 .build();
         var syncNode = new NodeBuilder()
                 .description("usync")
-                .attribute("sid", randomSid())
+                .attribute("sid", SecureBytes.randomSid())
                 .attribute("mode", "query")
                 .attribute("last", "true")
                 .attribute("index", "0")
@@ -895,10 +916,12 @@ public final class WhatsAppClient {
                 sendNode(iqNode);
             }
             case MOBILE -> {
+                var localJid = store.jid()
+                        .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
                 var iqNode = new NodeBuilder()
                         .description("iq")
                         .attribute("xmlns", "w:profile:picture")
-                        .attribute("to", jidOrThrowError())
+                        .attribute("to", localJid)
                         .attribute("type", "set")
                         .content(body);
                 sendNode(iqNode);
@@ -1101,7 +1124,9 @@ public final class WhatsAppClient {
      * @return a CompletableFuture
      */
     public Collection<BusinessCatalogEntry> queryBusinessCatalog(int productsLimit) {
-        return queryBusinessCatalog(jidOrThrowError().withoutData(), productsLimit);
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
+        return queryBusinessCatalog(localJid.withoutData(), productsLimit);
     }
 
     /**
@@ -1169,7 +1194,9 @@ public final class WhatsAppClient {
      * @return a CompletableFuture
      */
     public Collection<BusinessCollectionEntry> queryBusinessCollections(int collectionsLimit) {
-        return queryBusinessCollections(jidOrThrowError().withoutData(), collectionsLimit);
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
+        return queryBusinessCollections(localJid.withoutData(), collectionsLimit);
     }
 
     /**
@@ -1284,19 +1311,22 @@ public final class WhatsAppClient {
             store.setOnline(presence == AVAILABLE);
         }
 
-        var self = store.findContactByJid(jidOrThrowError().withoutData());
-        if (self.isEmpty()) {
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"))
+                .withoutData();
+
+        var localContact = store.findContactByJid(localJid);
+        if (localContact.isEmpty()) {
             return;
         }
-
-        self.get().setLastKnownPresence(presence);
+        localContact.get().setLastKnownPresence(presence);
 
         if (chatJid != null) {
             store.findChatByJid(chatJid)
-                    .ifPresent(chat -> chat.addPresence(self.get().jid(), presence));
+                    .ifPresent(chat -> chat.addPresence(localContact.get().jid(), presence));
         }
 
-        self.get().setLastSeen(ZonedDateTime.now());
+        localContact.get().setLastSeen(ZonedDateTime.now());
     }
 
     /**
@@ -1405,11 +1435,13 @@ public final class WhatsAppClient {
      * @return a CompletableFuture
      */
     public MessageInfo sendReaction(MessageInfo message, String reaction) {
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
         var key = new ChatMessageKeyBuilder()
                 .id(ChatMessageKey.randomId(store.clientType()))
                 .chatJid(message.parentJid())
                 .senderJid(message.senderJid())
-                .fromMe(Objects.equals(message.senderJid().withoutData(), jidOrThrowError().withoutData()))
+                .fromMe(Objects.equals(message.senderJid().withoutData(), localJid.withoutData()))
                 .id(message.id())
                 .build();
         var reactionMessage = new ReactionMessageBuilder()
@@ -1582,6 +1614,8 @@ public final class WhatsAppClient {
         if (recipient.toJid().hasServer(JidServer.newsletter())) {
             throw new IllegalArgumentException("Use sendNewsletterMessage to send a message in a newsletter");
         }
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
         var timestamp = Clock.nowSeconds();
         var deviceInfoMetadata = new DeviceListMetadataBuilder()
                 .senderTimestamp(Clock.nowSeconds())
@@ -1594,11 +1628,11 @@ public final class WhatsAppClient {
                 .id(ChatMessageKey.randomId(store.clientType()))
                 .chatJid(recipient.toJid())
                 .fromMe(true)
-                .senderJid(jidOrThrowError())
+                .senderJid(localJid)
                 .build();
         var info = new ChatMessageInfoBuilder()
                 .status(MessageStatus.PENDING)
-                .senderJid(jidOrThrowError())
+                .senderJid(localJid)
                 .key(key)
                 .message(message.withDeviceInfo(deviceInfo))
                 .timestampSeconds(timestamp)
@@ -1658,7 +1692,7 @@ public final class WhatsAppClient {
         if (compose) {
             changePresence(recipient, COMPOSING);
         }
-        sendMessage0(info, Map.of());
+        messageSenderService.sendMessage(info, Map.of());
         if (compose) {
             var pausedNode = new NodeBuilder()
                     .description("paused")
@@ -1681,14 +1715,20 @@ public final class WhatsAppClient {
      * @return a CompletableFuture
      */
     public NewsletterMessageInfo sendMessage(NewsletterMessageInfo info) {
-        return sendMessage0(info, Map.of());
+        messageSenderService.sendMessage(info, Map.of());
+        return info;
     }
 
-    // TODO: Implement message sending
-    private <T extends MessageInfo> T sendMessage0(T info, Map<String, ?> attributes) {
-        throw new UnsupportedOperationException("Not yet implemented");
-    }
 
+    /**
+     * Resends a message
+     *
+     * @param messsage the message to resend
+     * @param deviceJid the device to resend the message to
+     */
+    public void resendMessage(ChatMessageInfo messsage, Jid deviceJid) {
+        messageSenderService.resendToDevice(messsage, deviceJid);
+    }
 
     //</editor-fold>
 
@@ -1724,15 +1764,17 @@ public final class WhatsAppClient {
      */
     public ChatMessageInfo sendStatus(MessageContainer message) {
         var timestamp = Clock.nowSeconds();
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
         var key = new ChatMessageKeyBuilder()
                 .id(ChatMessageKey.randomId(store.clientType()))
                 .chatJid(Jid.statusBroadcastAccount())
                 .fromMe(true)
-                .senderJid(jidOrThrowError())
+                .senderJid(localJid)
                 .build();
         var info = new ChatMessageInfoBuilder()
                 .status(MessageStatus.PENDING)
-                .senderJid(jidOrThrowError())
+                .senderJid(localJid)
                 .key(key)
                 .timestampSeconds(timestamp)
                 .broadcast(false)
@@ -1754,11 +1796,8 @@ public final class WhatsAppClient {
                 throw new IllegalArgumentException("Expected media message, got: " + info.message().category());
             }
 
-            var meJid = store.jid()
-                    .orElse(null);
-            if (meJid == null) {
-                return;
-            }
+            var localJid = store.jid()
+                    .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
 
             var mediaKey = mediaProvider.mediaKey()
                     .orElseThrow(() -> new NoSuchElementException("Missing media key"));
@@ -1792,14 +1831,14 @@ public final class WhatsAppClient {
             var rmrBuilder = new NodeBuilder()
                     .description("rmr")
                     .attribute("value", info.parentJid())
-                    .attribute("from_me", meJid.user().equals(info.senderJid().user()));
+                    .attribute("from_me", Objects.equals(localJid.withoutData(), info.senderJid().withoutData()));
             if (!Objects.equals(info.parentJid(), info.senderJid())) {
                 rmrBuilder.attribute("participant", info.senderJid());
             }
             var node = new NodeBuilder()
                     .description("receipt")
                     .attribute("id", info.id())
-                    .attribute("to", jidOrThrowError().withoutData())
+                    .attribute("to", localJid.withoutData())
                     .attribute("type", "server-error")
                     .content(encryptNode, rmrBuilder.build());
             var result = sendNode(node, resultNode -> resultNode.hasDescription("notification"));
@@ -1921,25 +1960,27 @@ public final class WhatsAppClient {
                         .status(MessageStatus.PENDING)
                         .build();
                 info.setNewsletter(oldNewsletterInfo.newsletter());
-                sendMessage0(info, Map.of("edit", getEditBit(info)));
+                messageSenderService.sendMessage(info, Map.of("edit", getEditBit(info)));
                 return oldMessage;
             }
             case ChatMessageInfo oldChatInfo -> {
+                var localJid = store.jid()
+                        .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
                 var key = new ChatMessageKeyBuilder()
                         .id(oldChatInfo.id())
                         .chatJid(oldChatInfo.chatJid())
                         .fromMe(true)
-                        .senderJid(jidOrThrowError())
+                        .senderJid(localJid)
                         .build();
                 var info = new ChatMessageInfoBuilder()
                         .status(MessageStatus.PENDING)
-                        .senderJid(jidOrThrowError())
+                        .senderJid(localJid)
                         .key(key)
                         .message(MessageContainer.ofEditedMessage(newMessage))
                         .timestampSeconds(Clock.nowSeconds())
                         .broadcast(oldChatInfo.chatJid().hasServer(JidServer.broadcast()))
                         .build();
-                sendMessage0(info, Map.of("edit", getEditBit(info)));
+                messageSenderService.sendMessage(info, Map.of("edit", getEditBit(info)));
                 return oldMessage;
             }
             default -> throw new IllegalStateException("Unsupported edit: " + oldMessage);
@@ -1952,6 +1993,8 @@ public final class WhatsAppClient {
      * @param info the non-null message to delete
      */
     public void deleteMessage(NewsletterMessageInfo info) {
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
         var revokeInfo = new NewsletterMessageInfoBuilder()
                 .id(info.id())
                 .serverId(info.serverId())
@@ -1960,8 +2003,7 @@ public final class WhatsAppClient {
                 .status(MessageStatus.PENDING)
                 .build();
         revokeInfo.setNewsletter(info.newsletter());
-        sendMessage0(info, Map.of("edit", getEditBit(info)));
-        ;
+        messageSenderService.sendMessage(info, Map.of("edit", getDeleteBit(localJid, info)));
     }
 
     /**
@@ -1973,11 +2015,13 @@ public final class WhatsAppClient {
      */
     public void deleteMessage(ChatMessageInfo info, boolean everyone) {
         if (everyone) {
+            var localJid = store.jid()
+                    .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
             var message = new ProtocolMessageBuilder()
                     .protocolType(ProtocolMessage.Type.REVOKE)
                     .key(info.key())
                     .build();
-            var sender = info.chatJid().hasServer(JidServer.groupOrCommunity()) ? jidOrThrowError() : null;
+            var sender = info.chatJid().hasServer(JidServer.groupOrCommunity()) ? localJid : null;
             var key = new ChatMessageKeyBuilder()
                     .id(ChatMessageKey.randomId(store.clientType()))
                     .chatJid(info.chatJid())
@@ -1991,7 +2035,7 @@ public final class WhatsAppClient {
                     .message(MessageContainer.of(message))
                     .timestampSeconds(Clock.nowSeconds())
                     .build();
-            sendMessage0(info, Map.of("edit", getEditBit(info)));
+            messageSenderService.sendMessage(info, Map.of("edit", getDeleteBit(localJid, info)));
         } else {
             switch (store.clientType()) {
                 case WEB -> {
@@ -2017,12 +2061,12 @@ public final class WhatsAppClient {
         return 1;
     }
 
-    private int getDeleteBit(MessageInfo info) {
+    private int getDeleteBit(Jid localJid, MessageInfo info) {
         if (info.parentJid().hasServer(JidServer.newsletter())) {
             return 8;
         }
 
-        var fromMe = Objects.equals(info.senderJid().withoutData(), jidOrThrowError().withoutData());
+        var fromMe = Objects.equals(info.senderJid().withoutData(), localJid.withoutData());
         if (info.parentJid().hasServer(JidServer.groupOrCommunity()) && !fromMe) {
             return 8;
         }
@@ -2280,12 +2324,16 @@ public final class WhatsAppClient {
     }
 
     private String fromMeToFlag(MessageInfo info) {
-        var fromMe = Objects.equals(info.senderJid().withoutData(), jidOrThrowError().withoutData());
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
+        var fromMe = Objects.equals(info.senderJid().withoutData(), localJid.withoutData());
         return booleanToInt(fromMe);
     }
 
     private String participantToFlag(MessageInfo info) {
-        var fromMe = Objects.equals(info.senderJid().withoutData(), jidOrThrowError().withoutData());
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
+        var fromMe = Objects.equals(info.senderJid().withoutData(), localJid.withoutData());
         return info.parentJid().hasServer(JidServer.groupOrCommunity())
                && !fromMe ? info.senderJid().toString() : "0";
     }
@@ -2433,6 +2481,11 @@ public final class WhatsAppClient {
         var communityNode = node.getChild("parent")
                 .orElse(null);
         var policies = new HashMap<Integer, ChatSettingPolicy>();
+        var lidAddressingMode = node.hasAttribute("addressing_mode", "lid");
+        var linkedParent = node.getChild("linked_parent")
+                .flatMap(parent -> parent.getAttributeAsJid("jid"))
+                .orElse(null);
+        var isIncognito = node.hasChild("incognito");
         if (communityNode == null) {
             policies.put(GroupSetting.EDIT_GROUP_INFO.index(), ChatSettingPolicy.of(node.hasChild("announce")));
             policies.put(GroupSetting.SEND_MESSAGES.index(), ChatSettingPolicy.of(node.hasChild("restrict")));
@@ -2467,7 +2520,10 @@ public final class WhatsAppClient {
                     .settings(policies)
                     .participants(participants)
                     .ephemeralExpirationSeconds(ephemeral)
+                    .isLidAddressingMode(lidAddressingMode)
                     .isCommunity(false)
+                    .isIncognito(isIncognito)
+                    .parentCommunityJid(linkedParent)
                     .build();
         } else {
             policies.put(CommunitySetting.MODIFY_GROUPS.index(), ChatSettingPolicy.of(communityNode.hasChild("allow_non_admin_sub_group_creation")));
@@ -2523,6 +2579,7 @@ public final class WhatsAppClient {
                     .ephemeralExpirationSeconds(ephemeral)
                     .isCommunity(true)
                     .communityGroups(communityLinkedGroups)
+                    .isLidAddressingMode(lidAddressingMode)
                     .build();
         }
     }
@@ -2782,6 +2839,8 @@ public final class WhatsAppClient {
     }
 
     private List<Jid> executeActionOnParticipants(JidProvider chat, boolean community, GroupAction action, Set<Jid> jids) {
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
         if (jids.isEmpty()) {
             return List.of();
         }
@@ -2790,7 +2849,7 @@ public final class WhatsAppClient {
                 .map(JidProvider::toJid)
                 .map(jid -> new NodeBuilder()
                         .description("participant")
-                        .attribute("value", checkGroupParticipantJid(jid, "Cannot execute action on yourself"))
+                        .attribute("value", checkGroupParticipantJid(localJid, jid, "Cannot execute action on yourself"))
                         .build())
                 .toList();
         var actionNode = new NodeBuilder()
@@ -2811,12 +2870,12 @@ public final class WhatsAppClient {
                 .toList();
     }
 
-    private Jid checkGroupParticipantJid(Jid jid, String errorMessage) {
-        if (Objects.equals(jid.withoutData(), jidOrThrowError().withoutData())) {
+    private Jid checkGroupParticipantJid(Jid localJid, Jid groupParticipantJid, String errorMessage) {
+        if (Objects.equals(localJid.withoutData(), groupParticipantJid.withoutData())) {
             throw new IllegalArgumentException(errorMessage);
+        } else {
+            return groupParticipantJid;
         }
-
-        return jid;
     }
 
     /**
@@ -2862,7 +2921,7 @@ public final class WhatsAppClient {
         var bodyBuilder = new NodeBuilder()
                 .description("description");
         if (description != null) {
-            bodyBuilder.attribute("id", randomSid());
+            bodyBuilder.attribute("id", SecureBytes.randomSid());
             var bodyNode = new NodeBuilder()
                     .description("body")
                     .content(description.getBytes(StandardCharsets.UTF_8))
@@ -2955,6 +3014,8 @@ public final class WhatsAppClient {
     }
 
     private Optional<GroupOrCommunityMetadata> createGroup(String subject, ChatEphemeralTimer timer, JidProvider parentCommunity, JidProvider... contacts) {
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
         var timestamp = Clock.nowSeconds();
         if (subject == null || subject.isBlank()) {
             throw new IllegalArgumentException("The subject of a group cannot be blank");
@@ -2996,7 +3057,7 @@ public final class WhatsAppClient {
                 .distinct()
                 .map(contact -> new NodeBuilder()
                         .description("participant")
-                        .attribute("value", checkGroupParticipantJid(contact.toJid(), "Cannot create group with yourself as a participant"))
+                        .attribute("value", checkGroupParticipantJid(localJid, contact.toJid(), "Cannot create group with yourself as a participant"))
                         .build())
                 .forEach(children::add);
         var body = new NodeBuilder()
@@ -3742,7 +3803,7 @@ public final class WhatsAppClient {
     // TODO: Verify if this works on web as well
     public Collection<Jid> addContacts(JidProvider... contacts) {
         var users = Arrays.stream(contacts)
-                .filter(entry -> entry.toJid().hasServer(JidServer.user()) && !store.hasContact(entry))
+                .filter(entry -> entry.toJid().hasServer(JidServer.user()) && store.findContactByJid(entry).isEmpty())
                 .map(contact -> contact.toJid().toPhoneNumber())
                 .flatMap(Optional::stream)
                 .map(phoneNumber -> {
@@ -3804,7 +3865,7 @@ public final class WhatsAppClient {
                 .attribute("index", "0")
                 .attribute("last", "true")
                 .attribute("mode", "delta")
-                .attribute("sid", randomSid())
+                .attribute("sid", SecureBytes.randomSid())
                 .content(queryNode, listNode, sideListNode)
                 .build();
         var iqNode = new NodeBuilder()
@@ -3918,11 +3979,13 @@ public final class WhatsAppClient {
             throw new IllegalArgumentException("Calling is only available for the mobile api");
         }
         addContacts(contact);
-        querySessions(List.of(contact.toJid()));
+        deviceService.queryDevices(List.of(contact.toJid()));
         return sendCallMessage(contact, video);
     }
 
     private Call sendCallMessage(JidProvider jid, boolean video) {
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
         var callId = ChatMessageKey.randomId(store.clientType());
         var description = video ? "video" : "audio";
         var audioStream = new NodeBuilder()
@@ -3949,7 +4012,7 @@ public final class WhatsAppClient {
                 .attribute("ver", 1)
                 .content(HexFormat.of().parseHex("0104ff09c4fa"))
                 .build();
-        var callCreator = "%s:0@s.whatsapp.net".formatted(jidOrThrowError().user());
+        var callCreator = "%s:0@s.whatsapp.net".formatted(localJid.user());
         var offer = new NodeBuilder()
                 .description("offer")
                 .attribute("call-creator", callCreator)
@@ -3961,13 +4024,13 @@ public final class WhatsAppClient {
                 .attribute("to", jid)
                 .content(offer);
         var result = sendNode(callNode);
-        return onCallSent(jid, callId, result);
+        return onCallSent(localJid, jid.toJid(), callId, result);
     }
 
-    private Call onCallSent(JidProvider jid, String callId, Node result) {
+    private Call onCallSent(Jid callerJid, Jid chatJid, String callId, Node result) {
         var call = new CallBuilder()
-                .chatJid(jid.toJid())
-                .callerJid(jidOrThrowError())
+                .chatJid(chatJid.toJid())
+                .callerJid(callerJid)
                 .id(callId)
                 .timestampSeconds(Clock.nowSeconds())
                 .video(false)
@@ -4004,11 +4067,13 @@ public final class WhatsAppClient {
      * @param call the non-null call to reject
      */
     public boolean stopCall(Call call) {
+        var localJid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("Local jid is not available"));
         if (store.clientType() != WhatsAppClientType.MOBILE) {
             throw new IllegalArgumentException("Calling is only available for the mobile api");
         }
 
-        if (Objects.equals(call.callerJid().user(), jidOrThrowError().user())) {
+        if (Objects.equals(call.callerJid().withoutData(), localJid.withoutData())) {
             var rejectNode = new NodeBuilder()
                     .description("terminate")
                     .attribute("reason", "timeout")
@@ -4019,25 +4084,25 @@ public final class WhatsAppClient {
                     .description("call")
                     .attribute("to", call.chatJid())
                     .content(rejectNode);
-            var result = sendNode(body);
-            return result.getChild("error").isEmpty();
+            return !sendNode(body)
+                    .hasChild("error");
+        } else {
+            var rejectNode = new NodeBuilder()
+                    .description("reject")
+                    .attribute("call-id", call.id())
+                    .attribute("call-creator", call.callerJid())
+                    .attribute("count", 0)
+                    .build();
+            var body = new NodeBuilder()
+                    .description("call")
+                    .attribute("from", localJid)
+                    .attribute("to", call.callerJid())
+                    .content(rejectNode);
+            return !sendNode(body)
+                    .hasChild("error");
         }
-
-        var rejectNode = new NodeBuilder()
-                .description("reject")
-                .attribute("call-id", call.id())
-                .attribute("call-creator", call.callerJid())
-                .attribute("count", 0)
-                .build();
-        var body = new NodeBuilder()
-                .description("call")
-                .attribute("from", jidOrThrowError())
-                .attribute("to", call.callerJid())
-                .content(rejectNode);
-        var result = sendNode(body);
-        return result.getChild("error").isEmpty();
     }
-    //</editor-fold>  
+    //</editor-fold>
 
     //<editor-fold desc="Listeners">
 
@@ -4474,11 +4539,11 @@ public final class WhatsAppClient {
     //</editor-fold>
 
     public void pushWebAppState(PatchType type, List<PendingMutation> patches) {
-        webAppState.pushPatches(type, patches);
+        webAppStateService.pushPatches(type, patches);
     }
 
     public void pullWebAppState(PatchType... patches) {
-        webAppState.pullPatches(patches);
+        webAppStateService.pullPatches(patches);
     }
 
     private void updateBusinessCertificate(String newName) {
@@ -4652,10 +4717,6 @@ public final class WhatsAppClient {
     }
 
     // TODO: Stuff to fix
-
-    private void querySessions(List<Jid> jids) {
-
-    }
 
     private Node createCall(JidProvider jid) {
         return null;

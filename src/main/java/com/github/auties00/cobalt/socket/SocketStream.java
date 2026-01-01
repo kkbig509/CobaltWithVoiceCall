@@ -2,6 +2,9 @@ package com.github.auties00.cobalt.socket;
 
 import com.github.auties00.cobalt.client.WhatsAppClient;
 import com.github.auties00.cobalt.client.WhatsAppClientVerificationHandler;
+import com.github.auties00.cobalt.device.DeviceService;
+import com.github.auties00.cobalt.message.MessageReceiverService;
+import com.github.auties00.cobalt.migration.LidMigrationService;
 import com.github.auties00.cobalt.node.Node;
 import com.github.auties00.cobalt.socket.call.CallAckStreamNodeHandler;
 import com.github.auties00.cobalt.socket.call.CallStreamNodeHandler;
@@ -20,24 +23,31 @@ import java.util.*;
 
 public final class SocketStream {
     private final Map<String, SequencedCollection<Handler>> handlers;
-    public SocketStream(WhatsAppClient whatsapp, WhatsAppClientVerificationHandler.Web webVerificationHandler) {
-        var pairingCode = webVerificationHandler instanceof WhatsAppClientVerificationHandler.Web.PairingCode
-                ? new SocketPhonePairing()
-                : null;
+
+    public SocketStream(WhatsAppClient whatsapp, DeviceService deviceService, MessageReceiverService messageReceiverService, LidMigrationService lidMigrationService, WhatsAppClientVerificationHandler.Web webVerificationHandler) {
+        var pairingCode = switch (webVerificationHandler) {
+            case WhatsAppClientVerificationHandler.Web.PairingCode _ -> new SocketPhonePairing();
+            case WhatsAppClientVerificationHandler.Web.QrCode _ -> null;
+        };
+
         var result = new HashMap<String, SequencedCollection<Handler>>();
+
+        // Common handlers
         addHandler(result, new CallStreamNodeHandler(whatsapp));
         addHandler(result, new CallAckStreamNodeHandler(whatsapp));
         addHandler(result, new ErrorStreamNodeHandler(whatsapp));
         addHandler(result, new FailureStreamNodeHandler(whatsapp));
         addHandler(result, new IbStreamNodeHandler(whatsapp));
         addHandler(result, new IqStreamNodeHandler(whatsapp, webVerificationHandler, pairingCode));
-        addHandler(result, new MessageStreamNodeHandler(whatsapp));
+        addHandler(result, new MessageStreamNodeHandler(whatsapp, messageReceiverService, lidMigrationService));
         addHandler(result, new MessageAckStreamNodeHandler(whatsapp));
-        addHandler(result, new MessageReceiptStreamNodeHandler(whatsapp));
-        addHandler(result, new NotificationStreamNodeHandler(whatsapp, pairingCode));
+        addHandler(result, new MessageReceiptStreamNodeHandler(whatsapp, deviceService));
+        addHandler(result, new NotificationStreamNodeHandler(whatsapp, pairingCode, lidMigrationService));
         addHandler(result, new PresenceStreamNodeHandler(whatsapp));
         addHandler(result, new EndStreamNodeHandler(whatsapp));
         addHandler(result, new UpdateIdentityStreamNodeHandler(whatsapp));
+
+        // Session-specific handlers
         switch (whatsapp.store().clientType()) {
             case WEB -> {
                 addHandler(result, new WebNotifyStoreStreamNodeHandler(whatsapp));
@@ -58,6 +68,7 @@ public final class SocketStream {
                 addHandler(result, new MobileFinishLoginStreamNodeHandler(whatsapp));
             }
         }
+
         this.handlers = Collections.unmodifiableMap(result);
     }
 
@@ -76,10 +87,10 @@ public final class SocketStream {
         }
     }
 
-    public void dispose() {
+    public void reset() {
         for (var entry : handlers.entrySet()) {
             for(var handler : entry.getValue()) {
-                handler.dispose();
+                handler.reset();
             }
         }
     }
@@ -99,7 +110,7 @@ public final class SocketStream {
             return descriptions;
         }
 
-        public void dispose() {
+        public void reset() {
 
         }
     }

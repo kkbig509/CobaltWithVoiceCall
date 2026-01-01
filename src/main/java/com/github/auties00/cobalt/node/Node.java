@@ -381,6 +381,36 @@ public sealed interface Node {
                 .stream();
     }
 
+    default Optional<Integer> toContentInt() {
+        return toContentString().map(str -> {
+            try {
+                return Integer.parseInt(str);
+            }catch (NumberFormatException _) {
+                return null;
+            }
+        });
+    }
+
+    default Stream<Integer> streamContentInt() {
+        return toContentInt()
+                .stream();
+    }
+
+    default Optional<Long> toContentLong() {
+        return toContentString().map(str -> {
+            try {
+                return Long.parseLong(str);
+            }catch (NumberFormatException _) {
+                return null;
+            }
+        });
+    }
+
+    default Stream<Long> streamContentLong() {
+        return toContentLong()
+                .stream();
+    }
+
     /**
      * Converts the content of this node to a jid, if possible.
      *
@@ -444,6 +474,20 @@ public sealed interface Node {
         Objects.requireNonNull(description, "description cannot be null");
         return streamChildren(description)
                 .findFirst();
+    }
+
+    /**
+     * Finds a child node by its description within the current container node.
+     * If no child node with the specified description exists, {@code defaultValue} is returned
+     *
+     * @param description the description of the child node to find; cannot be null
+     * @param defaultValue the default value to return if no node with the provided description exists
+     * @return the child node with the provided description, if found, otherwise {@code defaultValue}
+     * @throws NullPointerException if the given description is null
+     */
+    default Node getChild(String description, Node defaultValue) {
+        return getChild(description)
+                .orElse(defaultValue);
     }
 
     /**

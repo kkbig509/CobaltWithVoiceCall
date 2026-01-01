@@ -29,13 +29,16 @@ public final class ErrorStreamNodeHandler extends SocketStream.Handler {
         } else if (node.hasChild("bad-mac")) {
             whatsapp.handleFailure(STREAM, new SessionBadMacException());
         } else {
-            var statusCode = Math.toIntExact(node.getRequiredAttributeAsLong("code"));
-            switch (statusCode) {
-                case 403, 503 -> handleBan();
-                case 500 -> handleLogout();
-                case 401 -> handleConflict(node);
-                case 515 -> handleReconnect();
-                default -> handleError(node);
+            var statusCode = node.getAttributeAsLong("code");
+            if(statusCode.isEmpty()) {
+                handleError(node);
+            } else {
+                switch (statusCode.getAsLong()) {
+                    case 403L, 503L -> handleBan();
+                    case 500L -> handleLogout();
+                    case 401L -> handleConflict(node);
+                    default -> handleReconnect();
+                }
             }
         }
     }
@@ -76,7 +79,7 @@ public final class ErrorStreamNodeHandler extends SocketStream.Handler {
     }
 
     @Override
-    public void dispose() {
+    public void reset() {
         retriedConnection.set(false);
     }
 }

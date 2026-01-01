@@ -12,179 +12,153 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import static com.github.auties00.cobalt.model.jid.JidConstants.*;
+
 /**
- * A model class that represents a value.
- * This class is only a model: this means that changing its values will have no real effect on WhatsappWeb's servers.
+ * A record that represents a WhatsApp JID
  */
-public final class Jid implements JidProvider {
-    private static final char PHONE_CHAR = '+';
-    private static final char SERVER_CHAR = '@';
-    private static final char DEVICE_CHAR = ':';
-    private static final char AGENT_CHAR = '_';
+public record Jid(String user, JidServer server, int device, int agent) implements JidProvider {
+    private static final ConcurrentMap<JidServer, Jid> JID_SERVER_CACHE = new ConcurrentHashMap<>();
+    
+    private static final Jid LEGACY_USER_SERVER = new Jid(null, JidServer.legacyUser());
+    private static final Jid GROUP_OR_COMMUNITY_SERVER = new Jid(null, JidServer.groupOrCommunity());
+    private static final Jid BROADCAST_SERVER = new Jid(null, JidServer.broadcast());
+    private static final Jid CALL_SERVER = new Jid(null, JidServer.call());
+    private static final Jid USER_SERVER = new Jid(null, JidServer.user());
+    private static final Jid LID_SERVER = new Jid(null, JidServer.lid());
+    private static final Jid NEWSLETTER_SERVER = new Jid(null, JidServer.newsletter());
+    private static final Jid BOT_SERVER = new Jid(null, JidServer.bot());
+    private static final Jid HOSTED_SERVER = new Jid(null, JidServer.hosted());
+    private static final Jid HOSTED_LID_SERVER = new Jid(null, JidServer.hostedLid());
+    private static final Jid MSGR_SERVER = new Jid(null, JidServer.messenger());
+    private static final Jid INTEROP_SERVER = new Jid(null, JidServer.interop());
+    
+    private static final Jid OFFICIAL_SURVEYS_ACCOUNT = new Jid("16505361212", JidServer.user());
+    private static final Jid OFFICIAL_BUSINESS_ACCOUNT = new Jid("16505361212", JidServer.legacyUser());
+    private static final Jid ANNOUNCEMENTS_ACCOUNT = new Jid("0", JidServer.user());
 
-    private static final Jid LEGACY_USER = new Jid(null, JidServer.legacyUser(), 0, 0);
-    private static final Jid GROUP_OR_COMMUNITY = new Jid(null, JidServer.groupOrCommunity(), 0, 0);
-    private static final Jid BROADCAST = new Jid(null, JidServer.broadcast(), 0, 0);
-    private static final Jid CALL = new Jid(null, JidServer.call(), 0, 0);
-    private static final Jid USER = new Jid(null, JidServer.user(), 0, 0);
-    private static final Jid LID = new Jid(null, JidServer.lid(), 0, 0);
-    private static final Jid NEWSLETTER = new Jid(null, JidServer.newsletter(), 0, 0);
-    private static final Jid BOT = new Jid(null, JidServer.bot(), 0, 0);
+    private static final Jid LOCATION_BROADCAST = new Jid("location", JidServer.broadcast());
 
-    private static final Jid OFFICIAL_SURVEYS_ACCOUNT = new Jid("16505361212", JidServer.user(), 0, 0);
-    private static final Jid OFFICIAL_BUSINESS_ACCOUNT = new Jid("16505361212", JidServer.legacyUser(), 0, 0);
-    private static final Jid STATUS_BROADCAST = new Jid("status", JidServer.broadcast(), 0, 0);
-    private static final Jid ANNOUNCEMENTS = new Jid("0", JidServer.user(), 0, 0);
-
-    private static final ConcurrentMap<JidServer, Jid> unknownServerJidsStore = new ConcurrentHashMap<>();
-
-    private final String user;
-    private final JidServer server;
-    private final int device;
-    private final int agent;
-
-    private Jid(String user, JidServer server, int device, int agent) {
-        this.user = user;
-        this.server = server;
-        this.device = checkUnsignedByte(device);
-        this.agent = checkUnsignedByte(agent);
+    public Jid {
+        Objects.requireNonNull(server, "server cannot be null");
+        checkUnsignedByte(device);
+        checkUnsignedByte(agent);
     }
-
-    private static int checkUnsignedByte(int i) {
-        if(i < 0 || i > 255) {
-            throw new MalformedJidException(i + " is not an unsigned byte");
-        }
-        return i;
+    
+    public Jid(String user, JidServer server) {
+        this(user, server, 0, 0);
     }
 
     public static Jid legacyUserServer() {
-        return LEGACY_USER;
+        return Jid.LEGACY_USER_SERVER;
     }
 
     public static Jid groupOrCommunityServer() {
-        return GROUP_OR_COMMUNITY;
+        return Jid.GROUP_OR_COMMUNITY_SERVER;
     }
 
-    public  static Jid broadcastServer() {
-        return BROADCAST;
+    public static Jid broadcastServer() {
+        return Jid.BROADCAST_SERVER;
     }
 
     public static Jid callServer() {
-        return CALL;
+        return Jid.CALL_SERVER;
     }
 
     public static Jid userServer() {
-        return USER;
+        return Jid.USER_SERVER;
     }
 
     public static Jid lidServer() {
-        return LID;
+        return Jid.LID_SERVER;
     }
 
     public static Jid newsletterServer() {
-        return NEWSLETTER;
+        return Jid.NEWSLETTER_SERVER;
     }
 
-    public static Jid Server() {
-        return BOT;
+    public static Jid botServer() {
+        return Jid.BOT_SERVER;
+    }
+
+    public static Jid hostedServer() {
+        return Jid.HOSTED_SERVER;
+    }
+
+    public static Jid hostedLidServer() {
+        return Jid.HOSTED_LID_SERVER;
+    }
+
+    public static Jid msgrServer() {
+        return Jid.MSGR_SERVER;
+    }
+
+    public static Jid interopServer() {
+        return Jid.INTEROP_SERVER;
     }
 
     public static Jid officialSurveysAccount() {
-        return OFFICIAL_SURVEYS_ACCOUNT;
+        return Jid.OFFICIAL_SURVEYS_ACCOUNT;
     }
 
     public static Jid officialBusinessAccount() {
-        return OFFICIAL_BUSINESS_ACCOUNT;
+        return Jid.OFFICIAL_BUSINESS_ACCOUNT;
     }
 
     public static Jid statusBroadcastAccount() {
-        return STATUS_BROADCAST;
+        return Jid.BROADCAST_SERVER;
     }
 
     public static Jid announcementsAccount() {
-        return ANNOUNCEMENTS;
+        return Jid.ANNOUNCEMENTS_ACCOUNT;
     }
 
-    /**
-     * Creates a new instance of Jid based on the provided input parameters.
-     * If the user value starts with a '+' character, the character is removed before constructing the Jid.
-     * Otherwise, the user value is used as is.
-     *
-     * @param user the user
-     * @param server the non-null server
-     * @param device the device
-     * @param agent the agent
-     * @return a non-null contact value
-     */
-    public static Jid of(String user, JidServer server, int device, int agent) {
-        Objects.requireNonNull(server, "Server cannot be null");
-        if(user == null) {
-            return new Jid(null, server, device, agent);
-        }
-
-        var inputLength = user.length();
-        var offset = !user.isEmpty() && user.charAt(0) == PHONE_CHAR
-                ? 1
-                : 0;
-        for(var i = 0; i < inputLength; i++) {
-            var token = user.charAt(i);
-            if (token == SERVER_CHAR || token == DEVICE_CHAR || token == AGENT_CHAR) {
-                return new Jid(user.substring(offset, i), server, device, agent);
-            }
-        }
-        return new Jid(offset == 0 ? user : user.substring(offset), server, device, agent);
+    public static Jid locationBroadcast() {
+        return Jid.LOCATION_BROADCAST;
     }
 
-    /**
-     * Constructs a new ContactId that represents a server
-     *
-     * @param server the non-null custom server
-     * @return a non-null contact value
-     */
     public static Jid of(JidServer server) {
         Objects.requireNonNull(server, "Server cannot be null");
         return switch (server.type()) {
-            case UNKNOWN -> unknownServerJidsStore.computeIfAbsent(server, value -> new Jid(null, value, 0, 0));
-            case LEGACY_USER -> LEGACY_USER;
-            case GROUP_OR_COMMUNITY -> GROUP_OR_COMMUNITY;
-            case BROADCAST -> BROADCAST;
-            case CALL -> CALL;
-            case USER -> USER;
-            case LID -> LID;
-            case NEWSLETTER -> NEWSLETTER;
-            case BOT -> BOT;
+            case UNKNOWN -> JID_SERVER_CACHE.computeIfAbsent(server, _ -> new Jid(null, server));
+            case LEGACY_USER -> legacyUserServer();
+            case GROUP_OR_COMMUNITY -> groupOrCommunityServer();
+            case BROADCAST -> broadcastServer();
+            case CALL -> callServer();
+            case USER -> userServer();
+            case LID -> lidServer();
+            case NEWSLETTER -> newsletterServer();
+            case BOT -> botServer();
+            case HOSTED -> hostedServer();
+            case HOSTED_LID -> hostedLidServer();
+            case MSGR -> msgrServer();
+            case INTEROP -> interopServer();
         };
     }
 
-    /**
-     * Constructs a new ContactId for a user from a value
-     *
-     * @param jid the non-null value of the user
-     * @return a non-null contact value
-     */
-    public static Jid of(long jid) {
-        if(jid < 0) {
-            throw new MalformedJidException("value cannot be negative");
+    public static Jid of(String user, JidServer server, int device, int agent) {
+        if (user == null) {
+            return of(server);
+        } else {
+            return new Jid(user, server, device, agent);
         }
-        return new Jid(String.valueOf(jid), JidServer.user(), 0, 0);
     }
 
-    /**
-     * Constructs a new ContactId for a user from a value and a custom server
-     *
-     * @param jid    the non-null value
-     * @return a non-null contact value
-     */
+    public static Jid of(long jid) {
+        if (jid < 0) {
+            throw new MalformedJidException("value cannot be negative");
+        }
+        return new Jid(String.valueOf(jid), JidServer.user());
+    }
+
     public static Jid of(String jid) {
-        if(jid == null) {
+        if (jid == null) {
             return null;
         }
-
         var knownServer = JidServer.of(jid, false);
-        if(knownServer != null) {
+        if (knownServer != null) {
             return of(knownServer);
         }
-
         var serverSeparatorIndex = jid.indexOf(SERVER_CHAR);
         var server = serverSeparatorIndex == -1
                 ? JidServer.user()
@@ -192,182 +166,82 @@ public final class Jid implements JidProvider {
         return parseJid(jid, serverSeparatorIndex, server);
     }
 
-    /**
-     * Constructs a new ContactId for a user from a value and a custom server
-     *
-     * @param user    the nullable user
-     * @param server the non-null custom server
-     * @return a non-null contact value
-     */
     public static Jid of(String user, JidServer server) {
         Objects.requireNonNull(server, "Server cannot be null");
         return parseJid(user, user.indexOf(SERVER_CHAR), server);
     }
 
-    private static Jid parseJid(String jid, int jidLength, JidServer server) {
-        var length = jidLength == -1 ? jid.length() : jidLength;
-        if (length == 0) {
-            return new Jid(null, server, 0, 0);
-        }
-
-        var offset = jid.charAt(0) == PHONE_CHAR ? 1 : 0;
-        if (offset >= length) {
-            throw new MalformedJidException("Malformed value '" + jid + "'");
-        }
-
-        enum ParserState {
-            USER,
-            DEVICE,
-            AGENT
-        }
-
-        var state = ParserState.USER;
-        var userLength = length;
-        var agent = 0;
-        var device = 0;
-        for (var parserPosition = 0; parserPosition < length; parserPosition++) {
-            var token = jid.charAt(offset + parserPosition);
-            if (token == SERVER_CHAR) {
-                if(state == ParserState.USER) {
-                    userLength = parserPosition;
-                }
-                server = JidServer.of(jid, offset + parserPosition + 1, length - parserPosition - 1);
-                break;
-            }
-
-            switch (state) {
-                case USER -> {
-                    if(token == DEVICE_CHAR) {
-                        userLength = parserPosition;
-                        state = ParserState.DEVICE;
-                    }else if(token == AGENT_CHAR) {
-                        userLength = parserPosition;
-                        state = ParserState.AGENT;
-                    }
-                }
-                case DEVICE -> {
-                    if (token == AGENT_CHAR) {
-                        if(agent != 0) {
-                            throw new MalformedJidException("Encountered unexpected token '" + token + "'" + " while parsing value '" + jid + "'");
-                        }
-                        state = ParserState.AGENT;
-                    } else if(Character.isDigit(token)) {
-                        device = device * 10 + (token - '0');
-                    }else {
-                        throw new MalformedJidException("Encountered unexpected token '" + token + "'" + " while parsing value '" + jid + "'");
-                    }
-                }
-                case AGENT -> {
-                    if (token == DEVICE_CHAR) {
-                        if(device != 0) {
-                            throw new MalformedJidException("Encountered unexpected token '" + token + "'" + " while parsing value '" + jid + "'");
-                        }
-                        state = ParserState.DEVICE;
-                    } else if(Character.isDigit(token)) {
-                        agent = agent * 10 + (token - '0');
-                    }else {
-                        throw new MalformedJidException("Encountered unexpected token '" + token + "'" + " while parsing value '" + jid + "'");
-                    }
-                }
-            }
-        }
-        var user = jid.substring(offset, offset + userLength);
-        return new Jid(user, server, device, agent);
-    }
-
-    /**
-     * Constructs a new ContactId for a user from a value
-     *
-     * @param jid the non-null value of the user
-     * @return a non-null contact value
-     */
     @ProtobufDeserializer
     public static Jid of(ProtobufString jid) {
-        return switch(jid) {
+        return switch (jid) {
             case ProtobufString.Lazy lazy -> Jid.of(lazy);
             case ProtobufString.Value value -> Jid.of(value.toString());
             case null -> null;
         };
     }
 
-    /**
-     * Constructs a new ContactId for a user from a value
-     *
-     * @param jid the non-null value of the user
-     * @return a non-null contact value
-     */
     public static Jid of(ProtobufString.Lazy jid) {
-        if(jid == null) {
+        if (jid == null) {
             return null;
         }
-
-        enum ParserState {
-            USER,
-            DEVICE,
-            AGENT,
-            SERVER
-        }
-
         var source = jid.encodedBytes();
         var offset = jid.encodedOffset();
         var length = jid.encodedLength();
-
         var knownServer = JidServer.of(source, offset, length, false);
-        if(knownServer != null) {
+        if (knownServer != null) {
             return of(knownServer);
         }
 
+        enum ParserState { USER, DEVICE, AGENT }
+
         var state = ParserState.USER;
-        var userLength = length; // Do not allocate a char[], it's slower
+        var userLength = length;
         var agent = 0;
         var device = 0;
         var server = JidServer.user();
         for (var parserPosition = 0; parserPosition < length; parserPosition++) {
             var token = (char) (source[offset + parserPosition] & 0x7F);
             if (token == SERVER_CHAR) {
-                if(state == ParserState.USER) {
+                if (state == ParserState.USER) {
                     userLength = parserPosition;
                 }
                 server = JidServer.of(source, offset + parserPosition + 1, length - parserPosition - 1, true);
                 break;
             }
-
             switch (state) {
                 case USER -> {
-                    if(token == DEVICE_CHAR) {
-                        // device is already 0
+                    if (token == DEVICE_CHAR) {
                         userLength = parserPosition;
                         state = ParserState.DEVICE;
-                    }else if(token == AGENT_CHAR) {
-                        // agent is already 0
+                    } else if (token == AGENT_CHAR) {
                         userLength = parserPosition;
                         state = ParserState.AGENT;
                     }
                 }
                 case DEVICE -> {
                     if (token == AGENT_CHAR) {
-                        if(agent != 0) {
-                            throw new MalformedJidException("Encountered unexpected token '" + token + "'" + " while parsing value '" + jid + "'");
+                        if (agent != 0) {
+                            throw new MalformedJidException("Encountered unexpected token '" + token + "' while parsing value '" + jid + "'");
                         }
                         state = ParserState.AGENT;
-                    } else if(Character.isDigit(token)) {
+                    } else if (Character.isDigit(token)) {
                         device = device * 10 + (token - '0');
-                    }else {
+                    } else {
                         var value = new String(source, offset, length, StandardCharsets.US_ASCII);
-                        throw new MalformedJidException("Encountered unexpected token '" + token + "'" + " while parsing value '" + value + "'");
+                        throw new MalformedJidException("Encountered unexpected token '" + token + "' while parsing value '" + value + "'");
                     }
                 }
                 case AGENT -> {
                     if (token == DEVICE_CHAR) {
-                        if(device != 0) {
-                            throw new MalformedJidException("Encountered unexpected token '" + token + "'" + " while parsing value '" + jid + "'");
+                        if (device != 0) {
+                            throw new MalformedJidException("Encountered unexpected token '" + token + "' while parsing value '" + jid + "'");
                         }
                         state = ParserState.DEVICE;
-                    } else if(Character.isDigit(token)) {
+                    } else if (Character.isDigit(token)) {
                         agent = agent * 10 + (token - '0');
-                    }else {
+                    } else {
                         var value = new String(source, offset, length, StandardCharsets.US_ASCII);
-                        throw new MalformedJidException("Encountered unexpected token '" + token + "'" + " while parsing value '" + value + "'");
+                        throw new MalformedJidException("Encountered unexpected token '" + token + "' while parsing value '" + value + "'");
                     }
                 }
             }
@@ -376,206 +250,234 @@ public final class Jid implements JidProvider {
         return new Jid(user, server, device, agent);
     }
 
-    /**
-     * Returns whether this value ends with the provided server
-     *
-     * @param server the server to check against
-     * @return a boolean
-     */
-    public boolean hasServer(JidServer server) {
-        return this.server.equals(server);
+    private static void checkUnsignedByte(int i) {
+        if (i < 0 || i > 255) {
+            throw new MalformedJidException(i + " is not an unsigned byte");
+        }
     }
 
-    /**
-     * Returns whether this value is a server value
-     *
-     * @param server the server to check against
-     * @return a boolean
-     */
-    public boolean isServerJid(JidServer server) {
-        return user == null && this.server.equals(server);
-    }
-
-    /**
-     * Returns a new value using with a different server
-     *
-     * @param server the new server
-     * @return a non-null value
-     */
-    public Jid withServer(JidServer server) {
-        return Objects.equals(this.server, server)
-                ? this
-                : new Jid(user, server, device, agent);
-    }
-
-    /**
-     * Returns a new value using with a different agent
-     *
-     * @param agent the new agent
-     * @return a non-null value
-     */
-    public Jid withAgent(int agent) {
-        return this.agent == agent
-                ? this
-                : new Jid(user, server, device, agent);
-    }
-    /**
-     * Returns a new value using with a different device
-     *
-     * @param device the new device
-     * @return a non-null value
-     */
-    public Jid withDevice(int device) {
-        return this.device == device
-                ? this
-                : new Jid(user, server, device, agent);
-    }
-
-    /**
-     * Converts this value to a user value
-     *
-     * @return a non-null value
-     */
-    public Jid withoutData() {
-        return !hasDevice() && !hasAgent()
-                ? this
-                : new Jid(user, server, 0, 0);
-    }
-
-    /**
-     * Converts this value to a non-formatted phone value
-     *
-     * @return a non-null String
-     */
-    public Optional<String> toPhoneNumber() {
-        if(user == null) {
-            return Optional.empty();
+    private static Jid parseJid(String jid, int jidLength, JidServer server) {
+        var length = jidLength == -1 ? jid.length() : jidLength;
+        if (length == 0) {
+            return of(server);
+        }
+        var offset = jid.charAt(0) == PHONE_CHAR ? 1 : 0;
+        if (offset >= length) {
+            throw new MalformedJidException("Malformed value '" + jid + "'");
         }
 
-        var length = user.length();
-        for(var i = 0; i < length; i++) {
-            if(!Character.isDigit(user.charAt(i))) {
-                return Optional.empty();
+        enum ParserState { USER, DEVICE, AGENT }
+
+        var state = ParserState.USER;
+        var userLength = length;
+        var agent = 0;
+        var device = 0;
+        for (var parserPosition = 0; parserPosition < length; parserPosition++) {
+            var token = jid.charAt(offset + parserPosition);
+            if (token == SERVER_CHAR) {
+                if (state == ParserState.USER) {
+                    userLength = parserPosition;
+                }
+                server = JidServer.of(jid, offset + parserPosition + 1, length - parserPosition - 1);
+                break;
+            }
+            switch (state) {
+                case USER -> {
+                    if (token == DEVICE_CHAR) {
+                        userLength = parserPosition;
+                        state = ParserState.DEVICE;
+                    } else if (token == AGENT_CHAR) {
+                        userLength = parserPosition;
+                        state = ParserState.AGENT;
+                    }
+                }
+                case DEVICE -> {
+                    if (token == AGENT_CHAR) {
+                        if (agent != 0) {
+                            throw new MalformedJidException("Encountered unexpected token '" + token + "' while parsing value '" + jid + "'");
+                        }
+                        state = ParserState.AGENT;
+                    } else if (Character.isDigit(token)) {
+                        device = device * 10 + (token - '0');
+                    } else {
+                        throw new MalformedJidException("Encountered unexpected token '" + token + "' while parsing value '" + jid + "'");
+                    }
+                }
+                case AGENT -> {
+                    if (token == DEVICE_CHAR) {
+                        if (device != 0) {
+                            throw new MalformedJidException("Encountered unexpected token '" + token + "' while parsing value '" + jid + "'");
+                        }
+                        state = ParserState.DEVICE;
+                    } else if (Character.isDigit(token)) {
+                        agent = agent * 10 + (token - '0');
+                    } else {
+                        throw new MalformedJidException("Encountered unexpected token '" + token + "' while parsing value '" + jid + "'");
+                    }
+                }
             }
         }
-
-        return Optional.of(PHONE_CHAR + user);
+        var user = jid.substring(offset, offset + userLength);
+        return new Jid(user, server, device, agent);
     }
-
-    /**
-     * Converts this value to a String
-     *
-     * @return a non-null String
-     */
-    @ProtobufSerializer
+    
     @Override
     public String toString() {
-        var hasUser = hasUser();
-        var hasAgent = hasAgent();
-        var hasDevice = hasDevice();
+        var hasUser = this.hasUser();
+        var hasAgent = this.hasAgent();
+        var hasDevice = this.hasDevice();
         if (!hasUser && !hasAgent && !hasDevice) {
-            return server.toString();
+            return this.server().toString();
         }
-
-        var user = hasUser ? this.user : "";
-        var agent = hasAgent ? "" + AGENT_CHAR + this.agent : "";
-        var device = hasDevice ? "" + DEVICE_CHAR + this.device : "";
-        return user + agent + device + SERVER_CHAR + server.toString();
+        var user = hasUser ? this.user() : "";
+        var agentStr = hasAgent ? "" + AGENT_CHAR + this.agent() : "";
+        var deviceStr = hasDevice ? "" + DEVICE_CHAR + this.device() : "";
+        return user + agentStr + deviceStr + SERVER_CHAR + this.server().toString();
     }
 
-    /**
-     * Converts this value to a signal address
-     *
-     * @return a non-null {@link SignalProtocolAddress}
-     */
-    public SignalProtocolAddress toSignalAddress() {
-        return new SignalProtocolAddress(user, device);
+    @ProtobufSerializer
+    public String toProtobufString() {
+        return toString();
     }
-
-    /**
-     * Returns this object as a value
-     *
-     * @return a non-null value
-     */
-    @Override
-    public Jid toJid() {
-        return this;
-    }
-
-    /**
-     * Returns the user
-     *
-     * @return a nullable value
-     */
-    public String user() {
-        return user;
-    }
-
-    /**
-     * Returns the server
-     *
-     * @return a non-null server
-     */
-    public JidServer server() {
-        return server;
-    }
-
-    /**
-     * Returns the device
-     *
-     * @return an unsigned int
-     */
-    public int device() {
-        return device;
-    }
-
-    /**
-     * Returns the agent
-     *
-     * @return an unsigned int
-     */
-    public int agent() {
-        return agent;
-    }
-
-    /**
-     * Returns whether this value specifies a user
-     *
-     * @return a boolean
-     */
+    
     public boolean hasUser() {
         return user != null;
     }
 
-    /**
-     * Returns whether this value specifies a device
-     *
-     * @return a boolean
-     */
+    public boolean hasUser(String user) {
+        return Objects.equals(this.user, user);
+    }
+    
+    public boolean hasServer(JidServer server) {
+        return this.server().equals(server);
+    }
+
     public boolean hasDevice() {
         return device != 0;
     }
+    
+    public boolean hasDevice(int device) {
+        return this.device == device;
+    }
 
-    /**
-     * Returns whether this value specifies an agent
-     *
-     * @return a boolean
-     */
     public boolean hasAgent() {
         return agent != 0;
     }
+    
+    public boolean hasAgent(int agent) {
+        return this.agent == agent;
+    }
 
-    @Override
-    public boolean equals(Object o) {
-        return o instanceof Jid that
-                && Objects.equals(user, that.user)
-                && Objects.equals(server, that.server)
-                && device == that.device
-                && agent == that.agent;
+    public boolean isServerJid(JidServer server) {
+        return user() == null && this.server().equals(server);
+    }
+
+    public boolean hasLidServer() {
+        return hasServer(JidServer.lid());
+    }
+
+    public boolean hasUserServer() {
+        return hasServer(JidServer.user()) || hasServer(JidServer.legacyUser());
+    }
+
+    public boolean hasGroupOrCommunityServer() {
+        return hasServer(JidServer.groupOrCommunity());
+    }
+
+    public boolean hasBroadcastServer() {
+        return hasServer(JidServer.broadcast());
+    }
+
+    public boolean isStatusBroadcastAccount() {
+        return statusBroadcastAccount().equals(this);
+    }
+
+    public boolean hasNewsletterServer() {
+        return hasServer(JidServer.newsletter());
+    }
+
+    public boolean hasBotServer() {
+        return hasServer(JidServer.bot());
+    }
+
+    public boolean hasCallServer() {
+        return hasServer(JidServer.call());
+    }
+
+    public boolean hasMessengerServer() {
+        return hasServer(JidServer.messenger());
+    }
+
+    public boolean hasInteropServer() {
+        return hasServer(JidServer.interop());
+    }
+
+    public boolean hasHostedServer() {
+        return hasServer(JidServer.hosted());
+    }
+
+    public boolean hasHostedLidServer() {
+        return hasServer(JidServer.hostedLid());
+    }
+
+    public Jid withServer(JidServer server) {
+        if (Objects.equals(this.server, server)) {
+            return this;
+        }
+        return new Jid(user, server, device, agent);
+    }
+
+    public Jid withAgent(int agent) {
+        if (this.agent == agent) {
+            return this;
+        }
+        return new Jid(user, server, device, agent);
+    }
+
+    public Jid withDevice(int device) {
+        if (this.device == device) {
+            return this;
+        }
+        return new Jid(user, server, device, agent);
+    }
+
+    public Jid withoutData() {
+        if (!hasDevice() && !hasAgent()) {
+            return this;
+        }
+        return new Jid(user, server);
+    }
+
+    public Jid toUserJid() {
+        var server = server();
+        if (server.equals(JidServer.hosted())) {
+            return Jid.of(user(), JidServer.user());
+        }
+        if (server.equals(JidServer.hostedLid())) {
+            return Jid.of(user(), JidServer.lid());
+        }
+        return withoutData();
+    }
+
+    public Optional<String> toPhoneNumber() {
+        var user = user();
+        if (user == null) {
+            return Optional.empty();
+        }
+        for (var i = 0; i < user.length(); i++) {
+            if (!Character.isDigit(user.charAt(i))) {
+                return Optional.empty();
+            }
+        }
+        return Optional.of('+' + user);
+    }
+
+    public SignalProtocolAddress toSignalAddress() {
+        return new SignalProtocolAddress(user(), device());
     }
 
     @Override
-    public int hashCode() {
-        return Objects.hash(user, server, device, agent);
+    public Jid toJid() {
+        return this;
     }
 }
